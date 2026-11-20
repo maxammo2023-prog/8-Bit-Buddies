@@ -37,7 +37,8 @@
 }
 
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;}
+html,body{height:100%;max-width:100%;overflow-x:hidden}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{
   font-family:Cinzel,Georgia,serif;
   color:var(--cream);
@@ -79,7 +80,7 @@ button{font-family:inherit;cursor:pointer}
 /* ---- Stage (scale to fit viewport) ---- */
 .stage{
   position:relative;z-index:5;
-  width:min(920px,96vw);
+  width:min(920px,96vw);max-width:100%;
   margin:0 auto;
   transform-origin:top center;
 }
@@ -155,7 +156,7 @@ button{font-family:inherit;cursor:pointer}
 
 /* ---- Jackpots ---- */
 .jackpots{
-  display:grid;grid-template-columns:1fr 1fr 1fr 1.35fr;gap:7px;
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.35fr);gap:7px;
   margin:8px 6px 6px;
 }
 .jp{
@@ -163,7 +164,7 @@ button{font-family:inherit;cursor:pointer}
   border:1px solid var(--metal2);
   box-shadow:inset 0 2px 6px #000, 0 0 0 1px rgba(232,184,74,.25), 0 0 10px rgba(0,0,0,.5);
   border-radius:6px;padding:4px 6px 5px;text-align:center;
-  position:relative;overflow:hidden;
+  position:relative;overflow:hidden;min-width:0;white-space:nowrap;
 }
 .jp::before{
   content:"";position:absolute;inset:0;
@@ -261,13 +262,13 @@ button{font-family:inherit;cursor:pointer}
   text-shadow:0 0 10px rgba(255,200,80,.45);font-size:clamp(.75rem,1.8vw,.95rem);
 }
 .meters{
-  display:grid;grid-template-columns:1.2fr 1.1fr .9fr 1.1fr;gap:6px;
+  display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1.1fr) minmax(0,.9fr) minmax(0,1.1fr);gap:6px;
   margin:2px 6px 8px;
 }
 .meter{
   background:linear-gradient(180deg,#1c0c0e,#0a0406);
   border:1px solid var(--metal2);border-radius:6px;padding:4px 8px 5px;
-  box-shadow:inset 0 2px 5px #000;
+  box-shadow:inset 0 2px 5px #000;min-width:0;overflow:hidden;white-space:nowrap;
 }
 .m-label{
   display:block;font-family:"Archivo Black",sans-serif;
@@ -475,32 +476,74 @@ body.fs-mode .cabinet{
     0 28px 70px rgba(0,0,0,.75),inset 0 1px 0 rgba(255,240,200,.45);
 }
 
+/* ---- Phones (portrait). body.phone is set by fitStage() from the real layout viewport ---- */
 @media (max-width:700px){
-  .cabinet{padding:4px 6px 6px;margin-top:0;width:100%;border-radius:0;box-shadow:none;display:flex;flex-direction:column}
-  .crest-stack{width:min(420px,78%);margin:0 auto}
+  .stage{width:100%}
+  .cabinet{padding:4px 6px 6px;margin-top:0;width:100%;border-radius:0;box-shadow:none;display:flex;flex-direction:column;justify-content:space-evenly}
+  .crest-stack{width:min(420px,72%);margin:0 auto}
   .crest-title{width:40%;top:45.5%}
   .crest-title h1{font-size:clamp(1rem,5vw,1.35rem)}
   .ribbon-text{letter-spacing:.2em;margin-top:0;font-size:.62rem}
   .motto{font-size:.58rem;margin-top:2px;margin-bottom:2px}
-  .jackpots{grid-template-columns:1fr 1fr 1fr 1.2fr;gap:4px;margin:4px 2px 2px}
-  .jp{padding:3px 4px}
-  .jp-val{font-size:.8rem}
-  .jp.grand .jp-val{font-size:.95rem}
-  .reel-bezel{padding:7px;margin:2px}
-  .reel-wrap{height:clamp(200px,34vh,300px)}
-  .message{margin:4px 4px 2px;font-size:.7rem}
-  .meters{grid-template-columns:1fr 1fr;gap:4px;margin:2px 4px 4px}
-  .controls{margin:0 0 4px;gap:6px;padding-bottom:max(4px, env(safe-area-inset-bottom))}
-  .btn{height:38px;min-width:46px;font-size:.64rem}
-  .spin{width:68px;height:68px;font-size:.85rem}
+  .jackpots{grid-template-columns:repeat(3,minmax(0,1fr)) minmax(0,1.25fr);gap:4px;margin:4px 0 2px}
+  .jp{padding:3px 2px}
+  .jp-label{font-size:clamp(.44rem,2.3vw,.56rem);letter-spacing:.1em}
+  .jp.grand .jp-label{font-size:clamp(.5rem,2.6vw,.62rem)}
+  .jp-val{font-size:clamp(.62rem,3.4vw,.82rem);letter-spacing:0}
+  .jp.grand .jp-val{font-size:clamp(.72rem,3.9vw,.98rem)}
+  .reel-bezel{padding:6px;margin:2px 0}
+  .reel-wrap{height:clamp(150px,60vw,300px)}
+  .led-row{padding:2px 8px}
+  .message{margin:4px 2px 2px;font-size:clamp(.6rem,3vw,.72rem);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .meters{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin:2px 0 4px}
+  .meter{padding:3px 7px 4px}
+  .m-val{font-size:clamp(.8rem,4vw,1rem)}
+  .controls{flex-wrap:nowrap;justify-content:space-between;margin:0 0 4px;gap:clamp(3px,1.4vw,6px);padding:0 2px max(4px, env(safe-area-inset-bottom))}
+  .btn{flex:1 1 0;min-width:0;height:42px;padding:0 2px;font-size:clamp(.52rem,2.7vw,.64rem);letter-spacing:.04em}
+  .btn.icon{flex:0 0 38px;min-width:38px;font-size:.9rem}
+  #btnRefill{flex:1 1 0}
+  .spin{flex:0 0 auto;width:clamp(60px,17vw,72px);height:clamp(60px,17vw,72px);font-size:.82rem;margin:0 4px}
   .disc{display:none}
   .led-row i{width:5px;height:5px}
 }
-@media (max-height:700px){
+@media (max-height:700px) and (min-width:701px){
   .reel-wrap{max-height:34dvh;min-height:180px}
   .motto{display:none}
   .crest-stack{max-width:520px}
 }
+
+/* ---- Phones (landscape): reels left, info column right, controls along the bottom ---- */
+body.land-phone .stage{width:100%}
+body.land-phone .cabinet{
+  display:grid;width:100%;border-radius:0;box-shadow:none;
+  padding:4px max(8px,env(safe-area-inset-right)) 4px max(8px,env(safe-area-inset-left));
+  grid-template-columns:minmax(0,1fr) minmax(210px,34%);
+  grid-template-areas:"reels marquee" "reels jp" "reels msg" "reels meters" "controls controls";
+  grid-template-rows:auto auto auto 1fr auto;
+  column-gap:10px;align-items:start;
+}
+body.land-phone .marquee{grid-area:marquee;margin:0}
+body.land-phone .crest-stack{width:min(150px,100%)}
+body.land-phone .crest-title h1{font-size:.85rem}
+body.land-phone .ribbon-text{font-size:.48rem;margin-top:-2px;letter-spacing:.2em}
+body.land-phone .motto,body.land-phone .led-row,body.land-phone .disc{display:none}
+body.land-phone .jackpots{grid-area:jp;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin:3px 0 2px}
+body.land-phone .jp{padding:1px 4px 2px}
+body.land-phone .jp-label,body.land-phone .jp.grand .jp-label{font-size:.48rem}
+body.land-phone .jp-val,body.land-phone .jp.grand .jp-val{font-size:.8rem}
+body.land-phone .reel-bezel{grid-area:reels;margin:0;padding:6px;align-self:center}
+body.land-phone .reel-wrap{max-height:none;min-height:0}
+body.land-phone .message{grid-area:msg;margin:2px 0;font-size:.6rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.land-phone .meters{grid-area:meters;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin:0}
+body.land-phone .meter{padding:2px 6px 3px}
+body.land-phone .m-label{font-size:.46rem}
+body.land-phone .m-val{font-size:.78rem}
+body.land-phone .m-skin{font-size:.52rem}
+body.land-phone .meter.level .xp{margin:2px 0 1px;height:4px}
+body.land-phone .controls{grid-area:controls;margin:4px 0 0;gap:8px;flex-wrap:nowrap;justify-content:center;padding:0 0 max(0px,env(safe-area-inset-bottom))}
+body.land-phone .btn{flex:0 1 84px;min-width:0;height:36px;padding:0 4px;font-size:.6rem;letter-spacing:.06em}
+body.land-phone .btn.icon{flex:0 0 40px;min-width:40px}
+body.land-phone .spin{flex:0 0 auto;width:56px;height:56px;font-size:.74rem;margin:0 10px}
 
 .wheel-legend{margin:4px 0 0;font-family:"Archivo Black",sans-serif;font-size:.62rem;letter-spacing:.12em;color:var(--gold2)}
 .wheel-legend b{display:inline-block;margin:0 5px;padding:2px 7px;border-radius:999px;font-weight:700}
@@ -1112,46 +1155,98 @@ function fitLogo(){
   h1.style.fontSize=Math.max(minPx, Math.floor(lo))+"px";
 }
 
+// Layout viewport size. Uses documentElement.client* (the real layout viewport),
+// not innerWidth, which on Android Chrome can be stale during rotation/URL-bar
+// changes or inflated when content overflows.
+function viewport(){
+  const de=document.documentElement;
+  const vv=window.visualViewport;
+  let w=de.clientWidth||window.innerWidth;
+  let h=de.clientHeight||window.innerHeight;
+  if (vv && vv.scale<=1.01){ w=Math.min(w, Math.round(vv.width)||w); h=Math.min(h, Math.round(vv.height)||h); }
+  return {w, h};
+}
+function isLandPhone(v){ return v.w>v.h && v.h<=520; }
+
 function fitStage(){
-  const stage=$("stage"), cab=$("cabinet");
-  if (!stage || !cab) return;
+  const stage=$("stage"), cab=$("cabinet"), wrap=$("reelWrap");
+  if (!stage || !cab || !wrap) return;
+  const v=viewport();
+  const land=isLandPhone(v);
+  const phone=land || v.w<=700;
+  document.body.classList.toggle("land-phone", land);
+  document.body.classList.toggle("phone", phone);
+  // reset to pure-CSS layout (width is never pinned in px any more)
   stage.style.transform="none";
-  stage.style.width = "";
-  const pad=8;
-  const availW=Math.max(320, window.innerWidth-pad);
-  const availH=Math.max(480, window.innerHeight-pad);
-  // natural width target
-  const natW=Math.min(920, availW);
-  stage.style.width=natW+"px";
+  stage.style.width="";
+  stage.style.marginBottom="";
+  wrap.style.height="";
+  cab.style.minHeight="";
+  const pad=phone?0:8;
+  const availW=Math.max(200, v.w-pad);
+  const availH=Math.max(200, v.h-pad);
+  if (phone){
+    // Size the reel window to the space that is actually left, instead of
+    // shrinking the whole cabinet (keeps buttons big and tappable).
+    const wrapW=wrap.clientWidth;
+    const ideal=land ? wrapW*0.62 : Math.min(wrapW*0.8, 520);
+    const minH=land ? 120 : Math.max(130, wrapW*0.44);
+    // largest reel window (<= ideal) that lets the cabinet fit the screen height
+    const fits=(x)=>{ wrap.style.height=Math.floor(x)+"px"; return cab.offsetHeight<=availH+0.5; };
+    let hh=ideal;
+    if (!fits(ideal)){
+      let lo=minH, hi=ideal;
+      for (let i=0;i<9;i++){ const mid=(lo+hi)/2; if (fits(mid)) lo=mid; else hi=mid; }
+      hh=lo;
+    }
+    wrap.style.height=Math.floor(hh)+"px";
+    cab.style.minHeight=availH+"px";
+  }
   const h=cab.offsetHeight;
-  const w=cab.offsetWidth||natW;
+  const w=cab.offsetWidth;
   const s=Math.min(1, availH/Math.max(1,h), availW/Math.max(1,w));
-  stage.style.transform=`scale(${s})`;
-  stage.style.marginBottom = s<1 ? ((h*(s-1))+"px") : "0";
+  if (s<0.999){
+    stage.style.transform=`scale(${s})`;
+    stage.style.marginBottom=(h*(s-1))+"px";
+  }
 }
 
 function resizeCanvas(){
   const wrap=$("reelWrap");
   if (!wrap || !canvas) return;
-  const r=wrap.getBoundingClientRect();
+  // clientWidth/Height are layout sizes, unaffected by the stage's CSS
+  // scale() transform (getBoundingClientRect() is not, which made the grid
+  // render at scale x scale size in the top-left of the window).
+  const W=wrap.clientWidth, H=wrap.clientHeight;
+  if (W<2 || H<2) return;
   const dpr=Math.min(2, window.devicePixelRatio||1);
-  canvas.width=Math.max(1,r.width*dpr);
-  canvas.height=Math.max(1,r.height*dpr);
-  canvas.style.width=r.width+"px";
-  canvas.style.height=r.height+"px";
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  layout.w=r.width; layout.h=r.height;
-  const pad=10, gapX=7, gapY=6;
-  const cellW=(r.width - pad*2 - gapX*4)/5;
-  const cellH=(r.height - pad*2 - gapY*2)/3;
+  const bw=Math.round(W*dpr), bh=Math.round(H*dpr);
+  if (canvas.width!==bw) canvas.width=bw;
+  if (canvas.height!==bh) canvas.height=bh;
+  canvas.style.width="100%";
+  canvas.style.height="100%";
+  ctx.setTransform(bw/W,0,0,bh/H,0,0);
+  layout.w=W; layout.h=H;
+  const pad=W<420?6:10, gapX=W<420?4:7, gapY=W<420?4:6;
+  const cellW=(W - pad*2 - gapX*4)/5;
+  const cellH=(H - pad*2 - gapY*2)/3;
   layout.pad=pad; layout.gapX=gapX; layout.gapY=gapY;
   layout.cellW=cellW; layout.cellH=cellH;
   layout.left=pad; layout.top=pad;
 
-  const pr=pCanvas.getBoundingClientRect();
-  pCanvas.width=pr.width*dpr; pCanvas.height=pr.height*dpr;
-  pCanvas.style.width=pr.width+"px"; pCanvas.style.height=pr.height+"px";
+  const pw=pCanvas.clientWidth||window.innerWidth, ph=pCanvas.clientHeight||window.innerHeight;
+  pCanvas.width=Math.round(pw*dpr); pCanvas.height=Math.round(ph*dpr);
   pctx.setTransform(dpr,0,0,dpr,0,0);
+}
+
+let relayoutQueued=false;
+function relayout(){
+  if (relayoutQueued) return;
+  relayoutQueued=true;
+  requestAnimationFrame(()=>{
+    relayoutQueued=false;
+    fitLogo(); fitStage(); fitLogo(); resizeCanvas();
+  });
 }
 
 function ensureReels(){
@@ -1999,7 +2094,14 @@ function bind(){
   window.addEventListener("keyup", (e)=>{
     if (e.code==="Space") $("btnSpin").classList.remove("down");
   });
-  window.addEventListener("resize", ()=>{ fitLogo(); resizeCanvas(); fitStage(); });
+  window.addEventListener("resize", relayout);
+  window.addEventListener("orientationchange", ()=>{ relayout(); setTimeout(relayout,150); setTimeout(relayout,500); });
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", relayout);
+  if (window.ResizeObserver){
+    const ro=new ResizeObserver(()=>{ resizeCanvas(); });
+    ro.observe($("reelWrap"));
+    new ResizeObserver(relayout).observe(document.documentElement);
+  }
 
   if (DEBUG){
     $("debug").classList.remove("hidden");
@@ -2036,7 +2138,7 @@ async function boot(){
   ensureReels();
   resizeCanvas();
   bind();
-  const afterType=()=>{ fitLogo(); fitStage(); resizeCanvas(); };
+  const afterType=()=>{ fitLogo(); fitStage(); fitLogo(); resizeCanvas(); };
   afterType();
   setTimeout(afterType, 50);
   setTimeout(afterType, 300);
