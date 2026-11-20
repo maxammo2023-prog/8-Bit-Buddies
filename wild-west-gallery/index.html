@@ -1,0 +1,1525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>WILD WEST GALLERY</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; background: #140c0a;
+    overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    -ms-interpolation-mode: nearest-neighbor;
+    display: block;
+    background: #2a1a12;
+    width: min(100vw, calc(100vh * 320 / 240));
+    height: min(100vh, calc(100vw * 240 / 320));
+    box-shadow: 0 0 0 2px #3a2418, 0 0 48px rgba(232, 168, 64, 0.18);
+    cursor: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="320" height="240" aria-label="WILD WEST GALLERY"></canvas>
+<script>
+/* ============================================================
+   WILD WEST GALLERY
+   8-bit shooting gallery. Solo, or online 2-player via PeerJS.
+   Host is authoritative. Solo still works if the CDN is down.
+   ============================================================ */
+
+(function () {
+  "use strict";
+
+  var W = 320, H = 240, HUD = 16;
+  var SCORE_KEY = "wwg-hiscore";
+  var MUTE_KEY = "wwg-muted";
+  var PEER_PREFIX = "wwg8bit-";
+  var CODE_CHARS = "ACDEFGHJKMNPQRTUVWXY345679";
+
+  // NES-like western palette
+  var C = {
+    bg:      "#2a1a12",
+    hud:     "#1a100c",
+    sky1:    "#3a2a5a",
+    sky2:    "#c45c2a",
+    sky3:    "#e8a040",
+    sky4:    "#f0c878",
+    sand:    "#c4924a",
+    dust:    "#a07438",
+    dirt:    "#6a4a28",
+    rock:    "#5a4030",
+    cactus:  "#2e6a32",
+    cactusD: "#1e4a22",
+    wood:    "#6a3a1a",
+    woodD:   "#3a2010",
+    white:   "#f4f0e0",
+    gray:    "#c0b8a0",
+    dark:    "#6a6050",
+    red:     "#e43b44",
+    redD:    "#8a1a1a",
+    blue:    "#3b7de0",
+    blueD:   "#1a3a8a",
+    yellow:  "#fee761",
+    orange:  "#f77622",
+    gold:    "#f0c838",
+    green:   "#63c74d",
+    pink:    "#f38ba8",
+    black:   "#0e0a08",
+    skin:    "#e0b090",
+    hat:     "#2a1a10",
+    bandana: "#a22633"
+  };
+
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+
+  // ---------- Input ----------
+  var keys = Object.create(null);
+  var justPressed = Object.create(null);
+  var pointer = { down: false, x: W / 2, y: H / 2, moved: false };
+  var typing = ""; // join-code entry
+
+  function onKey(e, down) {
+    var k = e.key;
+    if (k === " " || k.indexOf("Arrow") === 0) e.preventDefault();
+    var name = k.length === 1 ? k.toLowerCase() : k;
+    if (down && !keys[name]) justPressed[name] = true;
+    keys[name] = down;
+    if (down) audio.unlock();
+  }
+  window.addEventListener("keydown", function (e) { onKey(e, true); });
+  window.addEventListener("keyup", function (e) { onKey(e, false); });
+
+  function canvasPos(cx, cy) {
+    var r = canvas.getBoundingClientRect();
+    return { x: (cx - r.left) * (W / r.width), y: (cy - r.top) * (H / r.height) };
+  }
+  function aimAt(x, y) {
+    pointer.x = clamp(x, 0, W - 1);
+    pointer.y = clamp(y, HUD, H - 1);
+    pointer.moved = true;
+  }
+
+  canvas.addEventListener("mousedown", function (e) {
+    var p = canvasPos(e.clientX, e.clientY);
+    pointer.down = true; aimAt(p.x, p.y);
+    audio.unlock();
+    onPointerDown(p.x, p.y, false);
+  });
+  window.addEventListener("mousemove", function (e) {
+    var p = canvasPos(e.clientX, e.clientY);
+    aimAt(p.x, p.y);
+  });
+  window.addEventListener("mouseup", function () { pointer.down = false; });
+  canvas.addEventListener("touchstart", function (e) {
+    e.preventDefault();
+    var t = e.changedTouches[0];
+    var p = canvasPos(t.clientX, t.clientY);
+    pointer.down = true; aimAt(p.x, p.y);
+    audio.unlock();
+    onPointerDown(p.x, p.y, true);
+  }, { passive: false });
+  canvas.addEventListener("touchmove", function (e) {
+    e.preventDefault();
+    var t = e.touches[0];
+    var p = canvasPos(t.clientX, t.clientY);
+    aimAt(p.x, p.y);
+  }, { passive: false });
+  canvas.addEventListener("touchend", function (e) {
+    e.preventDefault();
+    if (e.touches.length === 0) pointer.down = false;
+  }, { passive: false });
+
+  function onPointerDown(x, y, isTouch) {
+    if (y < HUD && x > W - 18) { audio.toggleMute(); return; }
+    if (ui === "title") {
+      clickTitle(x, y);
+      return;
+    }
+    if (ui === "join") return;
+    if (ui === "host" && net.status === "connected") {
+      // host can click start if we required it — auto-starts on join
+      return;
+    }
+    if (ui === "play" || ui === "banner" || ui === "over" || ui === "ready") {
+      wantShot = true;
+    }
+  }
+
+  // ---------- Font (5x7) ----------
+  var FONT = {
+    "0":"01110100011001110101110011000101110",
+    "1":"00100011000010000100001000010001110",
+    "2":"01110100010000100010001000100011111",
+    "3":"01110100010000100110000011000101110",
+    "4":"00010001100101010010111110001000010",
+    "5":"11111100001111000001000011000101110",
+    "6":"01110100011000011110100011000101110",
+    "7":"11111000010001000100010000100001000",
+    "8":"01110100011000101110100011000101110",
+    "9":"01110100011000101111000011000101110",
+    "A":"01110100011000111111100011000110001",
+    "B":"11110100011000111110100011000111110",
+    "C":"01110100011000010000100001000101110",
+    "D":"11110100011000110001100011000111110",
+    "E":"11111100001000011110100001000011111",
+    "F":"11111100001000011110100001000010000",
+    "G":"01110100011000010111100011000101110",
+    "H":"10001100011000111111100011000110001",
+    "I":"01110001000010000100001000010001110",
+    "J":"00111000100001000010000101001001100",
+    "K":"10001100101010011000101001001010001",
+    "L":"10000100001000010000100001000011111",
+    "M":"10001110111010110101100011000110001",
+    "N":"10001110011010110011100011000110001",
+    "O":"01110100011000110001100011000101110",
+    "P":"11110100011000111110100001000010000",
+    "Q":"01110100011000110001101011001001101",
+    "R":"11110100011000111110100001001010001",
+    "S":"01111100001000001110000010000111110",
+    "T":"11111001000010000100001000010000100",
+    "U":"10001100011000110001100011000101110",
+    "V":"10001100011000110001100010101000100",
+    "W":"10001100011000110001101011010101010",
+    "X":"10001100010101000100010101000110001",
+    "Y":"10001100010101000100001000010000100",
+    "Z":"11111000010001000100010000100011111",
+    " ":"00000000000000000000000000000000000",
+    "-":"00000000000000011111000000000000000",
+    ":":"00000001000010000000001000010000000",
+    "!":"00100001000010000100001000000000100",
+    ".":"00000000000000000000000000010000100",
+    "/":"00001000010001000100010001000010000",
+    "?":"01110100010000100010001000000000100",
+    "*":"00000001010101000100010101010000000",
+    "+":"00000001000010011111001000010000000",
+    "=":"00000000000111110000011111000000000",
+    "'":"00100001000010000000000000000000000",
+    "?":"01110100010000100010001000000000100"
+  };
+
+  function drawText(str, x, y, color, scale, align) {
+    scale = scale || 1;
+    str = String(str).toUpperCase();
+    var tw = str.length * 6 * scale;
+    if (align === "center") x = (x - tw / 2) | 0;
+    else if (align === "right") x = (x - tw) | 0;
+    ctx.fillStyle = color;
+    for (var n = 0; n < str.length; n++) {
+      var bits = FONT[str[n]];
+      if (!bits) continue;
+      var ox = x + n * 6 * scale;
+      for (var i = 0; i < 35; i++) {
+        if (bits[i] === "1") {
+          ctx.fillRect(ox + (i % 5) * scale, y + ((i / 5) | 0) * scale, scale, scale);
+        }
+      }
+    }
+    return tw;
+  }
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function irand(a, b) { return (a + Math.random() * (b - a + 1)) | 0; }
+
+  // ---------- Audio ----------
+  var audio = { ctx: null, master: null, musicGain: null, sfxGain: null, muted: false, unlocked: false, timer: null, step: 0 };
+  try { audio.muted = localStorage.getItem(MUTE_KEY) === "1"; } catch (err) {}
+
+  audio.unlock = function () {
+    if (audio.unlocked) {
+      if (audio.ctx && audio.ctx.state === "suspended") audio.ctx.resume();
+      return;
+    }
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audio.ctx = new AC();
+      audio.master = audio.ctx.createGain();
+      audio.musicGain = audio.ctx.createGain();
+      audio.sfxGain = audio.ctx.createGain();
+      audio.musicGain.gain.value = 0.16;
+      audio.sfxGain.gain.value = 0.4;
+      audio.musicGain.connect(audio.master);
+      audio.sfxGain.connect(audio.master);
+      audio.master.connect(audio.ctx.destination);
+      audio.applyMute();
+      audio.unlocked = true;
+      audio.startMusic();
+    } catch (err) {}
+  };
+  audio.applyMute = function () {
+    if (!audio.master) return;
+    audio.master.gain.setValueAtTime(audio.muted ? 0 : 1, audio.ctx.currentTime);
+  };
+  audio.toggleMute = function () {
+    audio.muted = !audio.muted;
+    audio.applyMute();
+    try { localStorage.setItem(MUTE_KEY, audio.muted ? "1" : "0"); } catch (err) {}
+    audio.unlock();
+  };
+  audio.tone = function (freq, dur, type, vol, dest) {
+    if (!audio.ctx || audio.muted) return;
+    var t = audio.ctx.currentTime;
+    var osc = audio.ctx.createOscillator();
+    var g = audio.ctx.createGain();
+    osc.type = type || "square";
+    osc.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(g); g.connect(dest || audio.sfxGain);
+    osc.start(t); osc.stop(t + dur + 0.02);
+  };
+  audio.noise = function (dur, vol, cutoff) {
+    if (!audio.ctx || audio.muted) return;
+    var t = audio.ctx.currentTime;
+    var n = Math.floor(audio.ctx.sampleRate * dur);
+    var buf = audio.ctx.createBuffer(1, n, audio.ctx.sampleRate);
+    var d = buf.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    var src = audio.ctx.createBufferSource();
+    var g = audio.ctx.createGain();
+    var f = audio.ctx.createBiquadFilter();
+    f.type = "bandpass";
+    f.frequency.setValueAtTime(cutoff || 1200, t);
+    f.frequency.exponentialRampToValueAtTime(300, t + dur);
+    src.buffer = buf;
+    g.gain.setValueAtTime(vol || 0.35, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(audio.sfxGain);
+    src.start(t); src.stop(t + dur + 0.02);
+  };
+  audio.sfxShot = function () { audio.noise(0.12, 0.55, 2000); audio.tone(140, 0.08, "sawtooth", 0.18); };
+  audio.sfxBreak = function () { audio.noise(0.16, 0.35, 2500); audio.tone(880, 0.06, "square", 0.1); };
+  audio.sfxHit = function () { audio.tone(220, 0.08, "square", 0.16); audio.noise(0.1, 0.25, 800); };
+  audio.sfxBad = function () { audio.tone(160, 0.2, "square", 0.2); audio.tone(120, 0.25, "square", 0.16); };
+  audio.sfxWin = function () {
+    audio.tone(523, 0.1, "square", 0.18);
+    setTimeout(function () { audio.tone(659, 0.1, "square", 0.18); }, 100);
+    setTimeout(function () { audio.tone(784, 0.2, "square", 0.2); }, 200);
+  };
+  audio.sfxJoin = function () {
+    audio.tone(392, 0.08, "square", 0.16);
+    setTimeout(function () { audio.tone(584, 0.16, "square", 0.18); }, 90);
+  };
+
+  // Western-ish loop (pentatonic / minor whistle + bass)
+  var MELODY = [392,0,440,392,349,0,330,349, 392,392,440,494,440,392,349,330, 294,330,349,392,349,330,294,0, 262,294,330,349,330,294,262,247];
+  var BASS   = [98,98,98,98,87,87,87,87, 78,78,78,78,87,87,98,98, 73,73,73,73,87,87,87,87, 65,65,73,78,87,78,73,65];
+  audio.tickMusic = function () {
+    if (!audio.ctx || !audio.unlocked) return;
+    var s = audio.step % MELODY.length;
+    if (MELODY[s]) audio.tone(MELODY[s], 0.16, "square", 0.2, audio.musicGain);
+    if (BASS[s]) audio.tone(BASS[s], 0.2, "triangle", 0.26, audio.musicGain);
+    audio.step++;
+  };
+  audio.startMusic = function () {
+    audio.stopMusic();
+    if (!audio.ctx) return;
+    audio.step = 0;
+    audio.tickMusic();
+    audio.timer = setInterval(audio.tickMusic, 200);
+  };
+  audio.stopMusic = function () {
+    if (audio.timer) { clearInterval(audio.timer); audio.timer = null; }
+  };
+
+  // ---------- Networking (PeerJS, optional) ----------
+  var net = {
+    peer: null,
+    conn: null,
+    status: "idle", // idle | loading | waiting | connecting | connected | error | disconnected
+    room: "",
+    error: "",
+    lastRecv: 0,
+    peerOk: null // null unknown, true/false
+  };
+
+  function loadPeerJS(cb) {
+    if (window.Peer) { net.peerOk = true; cb(true); return; }
+    function trySrc(src, fallback) {
+      var s = document.createElement("script");
+      s.src = src;
+      s.onload = function () { net.peerOk = !!window.Peer; cb(net.peerOk); };
+      s.onerror = function () {
+        if (fallback) trySrc(fallback, null);
+        else { net.peerOk = false; cb(false); }
+      };
+      document.head.appendChild(s);
+    }
+    trySrc(
+      "https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js",
+      "https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"
+    );
+  }
+
+  // Preload the library in the background so Host/Join are snappy
+  loadPeerJS(function () {});
+
+  function makeCode() {
+    var c = "";
+    for (var i = 0; i < 4; i++) c += CODE_CHARS[(Math.random() * CODE_CHARS.length) | 0];
+    return c;
+  }
+  function peerId(code) { return PEER_PREFIX + String(code).toUpperCase(); }
+
+  function send(obj) {
+    if (net.conn && net.conn.open) {
+      try { net.conn.send(obj); } catch (err) {}
+    }
+  }
+
+  function closeNet() {
+    try { if (net.conn) net.conn.close(); } catch (err) {}
+    try { if (net.peer) net.peer.destroy(); } catch (err) {}
+    net.conn = null; net.peer = null;
+    net.status = "idle"; net.room = ""; net.error = "";
+  }
+
+  function wireConn(conn, asHost) {
+    net.conn = conn;
+    conn.on("open", function () {
+      net.status = "connected";
+      net.lastRecv = performance.now();
+      audio.sfxJoin();
+      if (asHost) {
+        // Guest just connected — start a fresh duel
+        beginMatch("host");
+        send({ t: "hello", room: net.room });
+        broadcastState();
+      }
+    });
+    conn.on("data", function (data) {
+      net.lastRecv = performance.now();
+      if (asHost) onGuestMsg(data);
+      else onHostMsg(data);
+    });
+    conn.on("close", function () { onDisconnect(); });
+    conn.on("error", function () { onDisconnect(); });
+  }
+
+  function onDisconnect() {
+    if (net.status === "idle") return;
+    net.status = "disconnected";
+    net.conn = null;
+    if (ui === "play" || ui === "ready" || ui === "banner") {
+      notice = { text: "PARTNER LEFT", sub: "CONTINUING SOLO  /  ESC TITLE", ttl: 3 };
+      mode = "solo";
+    } else if (ui === "host" || ui === "join") {
+      net.error = "Connection lost";
+      net.status = "error";
+    }
+  }
+
+  function hostGame(preferredCode) {
+    closeNet();
+    mode = "host";
+    ui = "host";
+    net.status = "loading";
+    net.error = "";
+    net.room = (preferredCode || makeCode()).toUpperCase();
+    loadPeerJS(function (ok) {
+      if (!ok) {
+        net.status = "error";
+        net.error = "Online unavailable (CDN failed). Solo still works.";
+        return;
+      }
+      try {
+        var peer = new window.Peer(peerId(net.room), { debug: 0 });
+        net.peer = peer;
+        peer.on("open", function () { net.status = "waiting"; });
+        peer.on("connection", function (conn) { wireConn(conn, true); });
+        peer.on("error", function (err) {
+          var t = err && err.type;
+          if (t === "unavailable-id") {
+            // Retry with a new code
+            net.room = makeCode();
+            try { peer.destroy(); } catch (e2) {}
+            hostGame(net.room);
+            return;
+          }
+          net.status = "error";
+          net.error = (err && err.message) ? String(err.message) : "Host error";
+        });
+        peer.on("disconnected", function () {
+          if (net.status === "waiting" || net.status === "connected") {
+            try { peer.reconnect(); } catch (e3) {}
+          }
+        });
+      } catch (err) {
+        net.status = "error";
+        net.error = "Could not start host";
+      }
+    });
+  }
+
+  function joinGame(code) {
+    code = String(code || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+    if (code.length < 4) {
+      net.error = "Enter a 4-character code";
+      net.status = "error";
+      return;
+    }
+    closeNet();
+    mode = "guest";
+    ui = "join";
+    typing = code;
+    net.room = code;
+    net.status = "loading";
+    net.error = "";
+    loadPeerJS(function (ok) {
+      if (!ok) {
+        net.status = "error";
+        net.error = "Online unavailable (CDN failed). Solo still works.";
+        return;
+      }
+      try {
+        var peer = new window.Peer({ debug: 0 });
+        net.peer = peer;
+        peer.on("open", function () {
+          net.status = "connecting";
+          var conn = peer.connect(peerId(code), { reliable: true });
+          wireConn(conn, false);
+          // Timeout if host never answers
+          setTimeout(function () {
+            if (net.status === "connecting") {
+              net.status = "error";
+              net.error = "Could not find room " + code;
+            }
+          }, 8000);
+        });
+        peer.on("error", function (err) {
+          net.status = "error";
+          net.error = (err && err.message) ? String(err.message) : "Join error";
+        });
+      } catch (err) {
+        net.status = "error";
+        net.error = "Could not join";
+      }
+    });
+  }
+
+  function onGuestMsg(data) {
+    if (!data || !data.t) return;
+    if (data.t === "aim") {
+      p2.x = data.x; p2.y = data.y;
+    } else if (data.t === "shot") {
+      p2.x = data.x; p2.y = data.y;
+      resolveShot(2, data.x, data.y);
+      broadcastState();
+    }
+  }
+
+  function onHostMsg(data) {
+    if (!data || !data.t) return;
+    if (data.t === "st") applyHostState(data);
+    else if (data.t === "hello") { /* connected */ }
+    else if (data.t === "fx") applyFx(data);
+  }
+
+  function broadcastState() {
+    if (mode !== "host") return;
+    send({
+      t: "st",
+      ui: (ui === "host" ? "play" : ui),
+      round: round,
+      rt: roundTime,
+      phaseT: phaseT,
+      p1: { x: p1.x, y: p1.y, score: p1.score, lives: p1.lives, cool: p1.cool },
+      p2: { x: p2.x, y: p2.y, score: p2.score, lives: p2.lives, cool: p2.cool },
+      targets: targets.map(packTarget),
+      banner: banner,
+      winner: winner,
+      notice: notice,
+      totalRounds: TOTAL_ROUNDS
+    });
+  }
+
+  function packTarget(tg) {
+    return { id: tg.id, typ: tg.typ, slot: tg.slot, pop: tg.pop, life: tg.life, max: tg.max, state: tg.state, hitBy: tg.hitBy, flip: tg.flip };
+  }
+
+  function applyHostState(d) {
+    // Guest applies authoritative snapshot (keeps local aim for self)
+    if (d.ui && d.ui !== "host") {
+      if (ui === "join" || ui === "title") ui = d.ui;
+      else if (d.ui === "play" || d.ui === "banner" || d.ui === "over" || d.ui === "ready") ui = d.ui;
+    }
+    round = d.round; roundTime = d.rt; phaseT = d.phaseT;
+    banner = d.banner; winner = d.winner; notice = d.notice;
+    p1.score = d.p1.score; p1.lives = d.p1.lives; p1.cool = d.p1.cool;
+    p1.x = d.p1.x; p1.y = d.p1.y;
+    p2.score = d.p2.score; p2.lives = d.p2.lives; p2.cool = d.p2.cool;
+    // Do not overwrite local guest crosshair (p2) with lagged host copy
+    targets = (d.targets || []).map(function (tg) {
+      return {
+        id: tg.id, typ: tg.typ, slot: tg.slot, pop: tg.pop, life: tg.life, max: tg.max,
+        state: tg.state, hitBy: tg.hitBy, flip: tg.flip
+      };
+    });
+  }
+
+  var fxQueue = [];
+  function applyFx(d) {
+    if (d.kind === "shot") { audio.sfxShot(); muzzle(d.x, d.y, d.who); }
+    if (d.kind === "hit") { burst(d.x, d.y, d.color, 16, 70); shake = Math.max(shake, 3); }
+    if (d.kind === "break") audio.sfxBreak();
+    if (d.kind === "bad") audio.sfxBad();
+    if (d.kind === "win") audio.sfxWin();
+  }
+  function emitFx(payload) {
+    applyFx(payload);
+    if (mode === "host") send({ t: "fx", kind: payload.kind, x: payload.x, y: payload.y, who: payload.who, color: payload.color });
+  }
+
+  // ---------- Game data ----------
+  var ui = "title"; // title | host | join | ready | play | banner | over | paused
+  var mode = "solo"; // solo | host | guest
+  var menuIndex = 0;
+  var time = 0, shake = 0, flash = 0, wantShot = false;
+  var hiScore = 0, newRecord = false;
+  try { hiScore = parseInt(localStorage.getItem(SCORE_KEY) || "0", 10) || 0; } catch (err) {}
+
+  var TOTAL_ROUNDS = 5;
+  var ROUND_SECS = 20;
+  var round = 0, roundTime = 0, phaseT = 0;
+  var banner = null, winner = 0, notice = null;
+  var spawnTimer = 0, nextId = 1;
+  var targets = [];
+  var particles = [];
+  var holes = []; // bullet holes on the backdrop
+  var clouds = [];
+
+  var p1 = makePlayer(W * 0.4, H * 0.55);
+  var p2 = makePlayer(W * 0.6, H * 0.55);
+
+  function makePlayer(x, y) {
+    return { x: x, y: y, score: 0, lives: 3, cool: 0, shots: 0, hits: 0 };
+  }
+
+  // Target booth slots (x, baseY, depth scale)
+  var SLOTS = [
+    { x: 36,  y: 132, z: 0.85 },
+    { x: 86,  y: 124, z: 0.9 },
+    { x: 140, y: 118, z: 0.95 },
+    { x: 180, y: 126, z: 0.9 },
+    { x: 236, y: 122, z: 0.92 },
+    { x: 286, y: 134, z: 0.85 },
+    { x: 60,  y: 168, z: 1 },
+    { x: 160, y: 160, z: 1 },
+    { x: 250, y: 170, z: 1 }
+  ];
+
+  // typ: bandit, bottle, can, gold, civilian
+  var TYPEINFO = {
+    bandit:    { pts: 200, w: 14, h: 20, life: 2.4 },
+    bottle:    { pts: 100, w: 6,  h: 12, life: 2.0 },
+    can:       { pts: 150, w: 8,  h: 10, life: 1.8 },
+    gold:      { pts: 500, w: 10, h: 10, life: 1.4 },
+    civilian:  { pts: 0,   w: 14, h: 20, life: 2.2 }
+  };
+
+  function localPlayer() { return mode === "guest" ? p2 : p1; }
+  function isMulti() { return mode === "host" || mode === "guest"; }
+
+  function roomLink() {
+    var base = location.origin + location.pathname;
+    return base + "?room=" + net.room;
+  }
+
+  // ---------- Match flow (host / solo simulate) ----------
+  function beginMatch(m) {
+    if (m) mode = m;
+    p1 = makePlayer(W * 0.4, H * 0.55);
+    p2 = makePlayer(W * 0.6, H * 0.55);
+    // Keep current pointer for the local player
+    var lp = localPlayer();
+    lp.x = pointer.x; lp.y = pointer.y;
+    targets = []; particles = []; holes = [];
+    nextId = 1; banner = null; winner = 0; notice = null;
+    newRecord = false;
+    round = 0;
+    ui = "ready";
+    phaseT = 1.6;
+    if (mode === "host") broadcastState();
+  }
+
+  function startSolo() {
+    closeNet();
+    mode = "solo";
+    beginMatch("solo");
+    audio.unlock();
+    audio.sfxJoin();
+  }
+
+  function startRound() {
+    round += 1;
+    roundTime = ROUND_SECS;
+    targets = [];
+    spawnTimer = 0.35;
+    ui = "play";
+    phaseT = 0;
+    banner = null;
+    if (mode === "host") broadcastState();
+  }
+
+  function endRound() {
+    var text, w;
+    if (mode === "solo") {
+      text = "ROUND " + round + " CLEAR";
+      w = 1;
+    } else if (p1.score === p2.score) {
+      text = "ROUND " + round + "  TIE";
+      w = 0;
+    } else if (p1.score > p2.score) {
+      text = "P1 WINS THE ROUND";
+      w = 1;
+    } else {
+      text = "P2 WINS THE ROUND";
+      w = 2;
+    }
+    banner = { text: text, sub: "P1 " + p1.score + "   P2 " + p2.score, winner: w };
+    winner = w;
+    ui = "banner";
+    phaseT = 2.4;
+    audio.sfxWin();
+    if (mode === "host") {
+      emitFx({ kind: "win" });
+      broadcastState();
+    }
+  }
+
+  function endMatch() {
+    ui = "over";
+    phaseT = 0;
+    if (mode === "solo") {
+      banner = { text: "GAME OVER", sub: "SCORE " + p1.score, winner: 1 };
+      if (p1.score > hiScore) {
+        hiScore = p1.score; newRecord = true;
+        try { localStorage.setItem(SCORE_KEY, String(hiScore)); } catch (err) {}
+        banner.sub = "NEW RECORD " + p1.score;
+      }
+    } else {
+      var w = p1.score === p2.score ? 0 : (p1.score > p2.score ? 1 : 2);
+      winner = w;
+      banner = {
+        text: w === 0 ? "DRAW GAME" : (w === 1 ? "P1 WINS THE DUEL" : "P2 WINS THE DUEL"),
+        sub: "P1 " + p1.score + "   P2 " + p2.score,
+        winner: w
+      };
+      var best = Math.max(p1.score, p2.score);
+      if (best > hiScore) {
+        hiScore = best; newRecord = true;
+        try { localStorage.setItem(SCORE_KEY, String(hiScore)); } catch (err) {}
+      }
+    }
+    if (mode === "host") broadcastState();
+  }
+
+  function occupiedSlot(s) {
+    for (var i = 0; i < targets.length; i++) {
+      if (targets[i].slot === s && targets[i].state !== "dead") return true;
+    }
+    return false;
+  }
+
+  function pickType() {
+    var r = Math.random();
+    var heat = round;
+    if (r < 0.10) return "civilian";
+    if (r < 0.18 && heat >= 2) return "gold";
+    if (r < 0.40) return "bottle";
+    if (r < 0.62) return "can";
+    return "bandit";
+  }
+
+  function spawnTarget() {
+    var free = [];
+    for (var i = 0; i < SLOTS.length; i++) if (!occupiedSlot(i)) free.push(i);
+    if (!free.length) return;
+    var slot = free[(Math.random() * free.length) | 0];
+    var typ = pickType();
+    var info = TYPEINFO[typ];
+    var life = info.life * (1 - Math.min(0.35, (round - 1) * 0.06));
+    targets.push({
+      id: nextId++, typ: typ, slot: slot,
+      pop: 0, life: life, max: life,
+      state: "up", hitBy: 0, flip: Math.random() < 0.5
+    });
+  }
+
+  function targetBox(tg) {
+    var sl = SLOTS[tg.slot];
+    var info = TYPEINFO[tg.typ];
+    var w = info.w, h = info.h;
+    var shown = clamp(tg.pop, 0, 1);
+    var x = sl.x - w / 2;
+    var y = sl.y - h * shown;
+    return { x: x, y: y, w: w, h: h * shown };
+  }
+
+  function resolveShot(who, x, y) {
+    var p = who === 2 ? p2 : p1;
+    if (ui !== "play") return false;
+    if (p.lives <= 0) return false;
+    if (p.cool > 0) return false;
+    p.cool = 0.22;
+    p.shots += 1;
+    emitFx({ kind: "shot", x: x, y: y, who: who });
+    holes.push({ x: x, y: y, t: 4, who: who });
+    if (holes.length > 40) holes.shift();
+
+    // Front-most target whose box contains the point (higher y / closer z first)
+    var hits = [];
+    for (var i = 0; i < targets.length; i++) {
+      var tg = targets[i];
+      if (tg.state !== "up" && tg.state !== "rise") continue;
+      if (tg.pop < 0.45) continue;
+      var box = targetBox(tg);
+      if (x >= box.x - 1 && x <= box.x + box.w + 1 && y >= box.y - 1 && y <= box.y + box.h + 1) {
+        hits.push({ tg: tg, z: SLOTS[tg.slot].z });
+      }
+    }
+    hits.sort(function (a, b) { return b.z - a.z; });
+    if (!hits.length) {
+      burst(x, y, C.dust, 6, 30);
+      return false;
+    }
+    var tgt = hits[0].tg;
+    tgt.state = "hit";
+    tgt.hitBy = who;
+    tgt.pop = 1;
+    p.hits += 1;
+    var info = TYPEINFO[tgt.typ];
+    var cx = SLOTS[tgt.slot].x, cy = SLOTS[tgt.slot].y - info.h / 2;
+    if (tgt.typ === "civilian") {
+      p.lives = Math.max(0, p.lives - 1);
+      emitFx({ kind: "bad", x: cx, y: cy, who: who, color: C.red });
+      flash = 0.15;
+      shake = Math.max(shake, 4);
+    } else {
+      p.score += info.pts;
+      emitFx({ kind: tgt.typ === "bottle" || tgt.typ === "can" ? "break" : "hit", x: cx, y: cy, who: who, color: tgt.typ === "gold" ? C.gold : C.orange });
+      shake = Math.max(shake, tgt.typ === "gold" ? 5 : 3);
+    }
+    return true;
+  }
+
+  function burst(x, y, color, n, speed) {
+    for (var i = 0; i < (n || 12); i++) {
+      var a = Math.random() * Math.PI * 2;
+      var s = rand((speed || 60) * 0.3, speed || 60);
+      particles.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20, life: rand(0.25, 0.65), c: color, sz: Math.random() < 0.3 ? 2 : 1 });
+    }
+  }
+  function muzzle(x, y, who) {
+    burst(x, y, who === 2 ? C.blue : C.red, 5, 40);
+    burst(x, y, C.yellow, 4, 30);
+  }
+
+  // ---------- Title / menus ----------
+  var MENU = ["SOLO", "HOST GAME", "JOIN GAME"];
+
+  function clickTitle(x, y) {
+    // Mute already handled
+    var top = 148;
+    for (var i = 0; i < MENU.length; i++) {
+      var my = top + i * 16;
+      if (y >= my - 2 && y <= my + 12) {
+        menuIndex = i;
+        chooseMenu();
+        return;
+      }
+    }
+  }
+
+  function chooseMenu() {
+    audio.unlock();
+    if (menuIndex === 0) startSolo();
+    else if (menuIndex === 1) {
+      if (net.peerOk === false) {
+        net.status = "error";
+        net.error = "Online unavailable (CDN failed). Solo still works.";
+        ui = "host";
+        mode = "host";
+        return;
+      }
+      hostGame();
+    } else {
+      ui = "join";
+      mode = "guest";
+      typing = "";
+      net.error = "";
+      net.status = "idle";
+    }
+  }
+
+  function backToTitle() {
+    closeNet();
+    ui = "title";
+    mode = "solo";
+    menuIndex = 0;
+    typing = "";
+    targets = [];
+    banner = null;
+    notice = null;
+  }
+
+  // Auto-join from ?room=CODE
+  (function autoJoin() {
+    try {
+      var q = new URLSearchParams(location.search);
+      var r = (q.get("room") || "").toUpperCase();
+      if (r.length === 4) {
+        menuIndex = 2;
+        joinGame(r);
+      }
+    } catch (err) {}
+  })();
+
+  // ---------- Update ----------
+  var lastBroadcast = 0;
+
+  function update(dt) {
+    time += dt;
+    if (justPressed["m"] || justPressed["M"]) audio.toggleMute();
+    if (shake > 0) shake = Math.max(0, shake - dt * 10);
+    if (flash > 0) flash = Math.max(0, flash - dt);
+    if (notice) { notice.ttl -= dt; if (notice.ttl <= 0) notice = null; }
+
+    if (ui === "title") updateTitle();
+    else if (ui === "host") updateHostScreen();
+    else if (ui === "join") updateJoinScreen();
+    else if (ui === "paused") {
+      if (justPressed["p"] || justPressed["P"] || justPressed["Enter"] || justPressed[" "]) ui = "play";
+      if (justPressed["Escape"]) backToTitle();
+    } else if (ui === "over") updateOver();
+    else updateSession(dt);
+
+    wantShot = false;
+  }
+
+  function updateTitle() {
+    if (justPressed["ArrowDown"] || justPressed["s"]) menuIndex = (menuIndex + 1) % 3;
+    if (justPressed["ArrowUp"] || justPressed["w"]) menuIndex = (menuIndex + 2) % 3;
+    if (justPressed["Enter"] || justPressed[" "]) chooseMenu();
+  }
+
+  function updateHostScreen() {
+    if (justPressed["Escape"]) backToTitle();
+    if (justPressed["Enter"] && net.status === "error") backToTitle();
+    // When connected, beginMatch already switched ui
+  }
+
+  function updateJoinScreen() {
+    if (justPressed["Escape"]) { backToTitle(); return; }
+    // Type code
+    for (var k in justPressed) {
+      if (!justPressed[k]) continue;
+      if (k === "Backspace") typing = typing.slice(0, -1);
+      else if (k === "Enter") {
+        if (typing.length === 4) joinGame(typing);
+      } else if (k.length === 1 && /[a-zA-Z0-9]/.test(k)) {
+        if (typing.length < 4) typing += k.toUpperCase();
+      }
+    }
+  }
+
+  function updateOver() {
+    if (justPressed["Enter"] || justPressed[" "] || justPressed["Spacebar"]) {
+      if (mode === "guest") {
+        // Guest cannot restart the match; host would need to — go title
+        backToTitle();
+      } else if (mode === "host" && net.status === "connected") {
+        beginMatch("host");
+        broadcastState();
+      } else {
+        startSolo();
+      }
+    }
+    if (justPressed["Escape"]) backToTitle();
+    if (pointer.down && pointer.y > 180) {
+      pointer.down = false;
+      if (mode === "host" && net.status === "connected") { beginMatch("host"); broadcastState(); }
+      else if (mode === "guest") backToTitle();
+      else startSolo();
+    }
+  }
+
+  function isSim() { return mode === "solo" || mode === "host"; }
+
+  function updateSession(dt) {
+    // Pause only in solo (host pause would freeze guest unfairly unless synced — skip for multi)
+    if (mode === "solo" && (justPressed["p"] || justPressed["P"])) {
+      ui = "paused";
+      return;
+    }
+    if (justPressed["Escape"]) { backToTitle(); return; }
+
+    // Local aim
+    var lp = localPlayer();
+    var sp = 140;
+    if (keys["ArrowLeft"] || keys["a"]) pointer.x -= sp * dt;
+    if (keys["ArrowRight"] || keys["d"]) pointer.x += sp * dt;
+    if (keys["ArrowUp"] || keys["w"]) pointer.y -= sp * dt;
+    if (keys["ArrowDown"] || keys["s"]) pointer.y += sp * dt;
+    pointer.x = clamp(pointer.x, 1, W - 2);
+    pointer.y = clamp(pointer.y, HUD + 2, H - 2);
+    lp.x = pointer.x; lp.y = pointer.y;
+
+    if (mode === "guest" && net.status === "connected") {
+      send({ t: "aim", x: p2.x, y: p2.y });
+    }
+
+    // Shots from local player
+    var shootKey = justPressed[" "] || justPressed["Spacebar"] || wantShot;
+    if (shootKey) {
+      if (isSim()) {
+        resolveShot(mode === "guest" ? 2 : 1, lp.x, lp.y);
+        if (mode === "host") broadcastState();
+      } else if (mode === "guest" && net.status === "connected") {
+        send({ t: "shot", x: p2.x, y: p2.y });
+        // local muzzle for responsiveness; host will confirm hit
+        audio.sfxShot();
+        muzzle(p2.x, p2.y, 2);
+      }
+    }
+
+    // Guest does not simulate rounds / spawns
+    if (!isSim()) {
+      // Still animate particles locally
+      updateParticles(dt);
+      return;
+    }
+
+    if (p1.cool > 0) p1.cool -= dt;
+    if (p2.cool > 0) p2.cool -= dt;
+
+    if (ui === "ready") {
+      phaseT -= dt;
+      if (phaseT <= 0) startRound();
+    } else if (ui === "banner") {
+      phaseT -= dt;
+      if (phaseT <= 0) {
+        if (round >= TOTAL_ROUNDS) endMatch();
+        else { ui = "ready"; phaseT = 1.2; if (mode === "host") broadcastState(); }
+      }
+    } else if (ui === "play") {
+      roundTime -= dt;
+      spawnTimer -= dt;
+      var rate = Math.max(0.35, 1.05 - round * 0.12);
+      if (spawnTimer <= 0) {
+        spawnTarget();
+        if (round >= 3 && Math.random() < 0.35) spawnTarget();
+        spawnTimer = rate;
+      }
+      for (var i = targets.length - 1; i >= 0; i--) {
+        var tg = targets[i];
+        if (tg.state === "up" || tg.state === "rise") {
+          tg.pop = Math.min(1, tg.pop + dt * 4);
+          if (tg.pop >= 1) tg.state = "up";
+          tg.life -= dt;
+          if (tg.life <= 0) tg.state = "down";
+        } else if (tg.state === "hit" || tg.state === "down") {
+          tg.pop -= dt * (tg.state === "hit" ? 3.2 : 3.5);
+          if (tg.pop <= 0) targets.splice(i, 1);
+        }
+      }
+      if (roundTime <= 0) endRound();
+    }
+
+    updateParticles(dt);
+
+    if (mode === "host" && net.status === "connected") {
+      lastBroadcast += dt;
+      if (lastBroadcast >= 0.05) { lastBroadcast = 0; broadcastState(); }
+    }
+  }
+
+  function updateParticles(dt) {
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var pt = particles[i];
+      pt.x += pt.vx * dt; pt.y += pt.vy * dt;
+      pt.vy += 80 * dt;
+      pt.life -= dt;
+      if (pt.life <= 0) particles.splice(i, 1);
+    }
+    for (i = holes.length - 1; i >= 0; i--) {
+      holes[i].t -= dt;
+      if (holes[i].t <= 0) holes.splice(i, 1);
+    }
+  }
+
+  // ---------- Render ----------
+  function render() {
+    var ox = 0, oy = 0;
+    if (shake > 0 && (ui === "play" || ui === "banner")) {
+      ox = (Math.random() * 2 - 1) * shake;
+      oy = (Math.random() * 2 - 1) * shake;
+    }
+    ctx.save();
+    ctx.translate(ox | 0, oy | 0);
+
+    drawBackdrop();
+
+    if (ui === "title") renderTitle();
+    else if (ui === "host") renderHost();
+    else if (ui === "join") renderJoin();
+    else {
+      drawHoles();
+      drawTargets();
+      drawParticles();
+      if (ui !== "over") {
+        if (isMulti() || mode === "solo") drawCrosshair(p1.x, p1.y, 1, mode !== "guest");
+        if (isMulti()) drawCrosshair(p2.x, p2.y, 2, mode === "guest");
+      }
+      drawHud();
+      if (ui === "ready") renderReady();
+      if (ui === "banner") renderBanner();
+      if (ui === "paused") renderPaused();
+      if (ui === "over") renderOver();
+      if (notice) {
+        ctx.fillStyle = "rgba(14,10,8,0.7)";
+        ctx.fillRect(20, 40, W - 40, 36);
+        drawText(notice.text, W / 2, 46, C.yellow, 1, "center");
+        drawText(notice.sub, W / 2, 60, C.gray, 1, "center");
+      }
+    }
+
+    if (flash > 0) {
+      ctx.globalAlpha = Math.min(0.5, flash * 3);
+      ctx.fillStyle = C.red;
+      ctx.fillRect(-8, -8, W + 16, H + 16);
+      ctx.globalAlpha = 1;
+    }
+    // Mute icon always
+    drawMute(W - 13, 3);
+
+    ctx.restore();
+  }
+
+  function drawBackdrop() {
+    // Banded sunset sky
+    var bands = [
+      [0, 50, C.sky1], [50, 40, "#6a3a68"], [90, 30, C.sky2], [120, 24, C.sky3], [144, 16, C.sky4]
+    ];
+    for (var i = 0; i < bands.length; i++) {
+      ctx.fillStyle = bands[i][2];
+      ctx.fillRect(0, bands[i][0], W, bands[i][1]);
+    }
+    // Sun
+    ctx.fillStyle = C.yellow;
+    ctx.fillRect(248, 86, 22, 22);
+    ctx.fillStyle = C.orange;
+    ctx.fillRect(250, 88, 18, 18);
+
+    // Distant mesas
+    ctx.fillStyle = "#8a4a3a";
+    mesa(10, 148, 70, 20);
+    mesa(80, 150, 90, 16);
+    mesa(200, 146, 80, 22);
+    mesa(270, 150, 50, 18);
+
+    // Ground
+    ctx.fillStyle = C.sand;
+    ctx.fillRect(0, 164, W, H - 164);
+    ctx.fillStyle = C.dust;
+    ctx.fillRect(0, 164, W, 3);
+    ctx.fillStyle = C.dirt;
+    for (var g = 0; g < 40; g++) {
+      // stable "dirt" specks
+      var gx = (g * 47 + 13) % W;
+      var gy = 170 + (g * 19 % 60);
+      ctx.fillRect(gx, gy, 2, 1);
+    }
+
+    // Fence
+    ctx.fillStyle = C.woodD;
+    ctx.fillRect(0, 176, W, 3);
+    for (var f = 0; f < 16; f++) ctx.fillRect(8 + f * 20, 168, 3, 18);
+
+    // Props: barrels, cactus, rocks, windows (cover for slots)
+    drawCactus(24, 150);
+    drawCactus(300, 154);
+    drawCactus(118, 148);
+    drawRock(70, 172);
+    drawRock(210, 174);
+    drawBarrel(150, 172);
+    drawBarrel(268, 170);
+    drawTrough(188, 176);
+
+    // Saloon facade left-center
+    ctx.fillStyle = C.wood;
+    ctx.fillRect(92, 100, 56, 66);
+    ctx.fillStyle = C.woodD;
+    ctx.fillRect(92, 100, 56, 4);
+    ctx.fillRect(114, 104, 12, 8); // sign post
+    ctx.fillStyle = C.redD;
+    ctx.fillRect(100, 92, 40, 12);
+    drawText("SALOON", 120, 95, C.yellow, 1, "center");
+    // windows
+    ctx.fillStyle = C.black;
+    ctx.fillRect(100, 116, 14, 16);
+    ctx.fillRect(126, 116, 14, 16);
+    ctx.fillStyle = C.gold;
+    ctx.fillRect(100, 116, 14, 2);
+    ctx.fillRect(126, 116, 14, 2);
+  }
+
+  function mesa(x, y, w, h) {
+    ctx.fillRect(x, y - h, w, h);
+    ctx.fillRect(x + 6, y - h - 6, w - 12, 6);
+  }
+  function drawCactus(x, y) {
+    ctx.fillStyle = C.cactus;
+    ctx.fillRect(x, y - 28, 6, 28);
+    ctx.fillRect(x - 6, y - 20, 6, 3);
+    ctx.fillRect(x - 6, y - 20, 3, 10);
+    ctx.fillRect(x + 6, y - 16, 6, 3);
+    ctx.fillRect(x + 9, y - 16, 3, 8);
+    ctx.fillStyle = C.cactusD;
+    ctx.fillRect(x + 5, y - 28, 1, 28);
+  }
+  function drawRock(x, y) {
+    ctx.fillStyle = C.rock;
+    ctx.fillRect(x, y - 10, 18, 10);
+    ctx.fillRect(x + 3, y - 14, 12, 4);
+  }
+  function drawBarrel(x, y) {
+    ctx.fillStyle = C.wood;
+    ctx.fillRect(x, y - 16, 12, 16);
+    ctx.fillStyle = C.woodD;
+    ctx.fillRect(x, y - 12, 12, 2);
+    ctx.fillRect(x, y - 5, 12, 2);
+    ctx.fillRect(x, y - 16, 12, 1);
+  }
+  function drawTrough(x, y) {
+    ctx.fillStyle = C.woodD;
+    ctx.fillRect(x, y - 8, 28, 8);
+    ctx.fillStyle = "#3a5a7a";
+    ctx.fillRect(x + 2, y - 6, 24, 3);
+  }
+
+  function drawHoles() {
+    for (var i = 0; i < holes.length; i++) {
+      var h = holes[i];
+      ctx.globalAlpha = Math.min(1, h.t / 2);
+      ctx.fillStyle = C.black;
+      ctx.fillRect((h.x | 0) - 1, (h.y | 0) - 1, 2, 2);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawTargets() {
+    // Draw farther slots first
+    var order = targets.map(function (t, i) { return i; });
+    order.sort(function (a, b) { return SLOTS[targets[a].slot].z - SLOTS[targets[b].slot].z; });
+    for (var n = 0; n < order.length; n++) {
+      var tg = targets[order[n]];
+      var box = targetBox(tg);
+      if (box.h < 1) continue;
+      ctx.save();
+      // Clip to pop height so they rise from cover
+      ctx.beginPath();
+      ctx.rect(box.x - 2, box.y, box.w + 4, box.h + 1);
+      ctx.clip();
+      var x = box.x | 0, y = box.y | 0;
+      if (tg.typ === "bottle") drawBottle(x, y, tg);
+      else if (tg.typ === "can") drawCan(x, y, tg);
+      else if (tg.typ === "gold") drawGold(x, y, tg);
+      else drawPerson(x, y, tg);
+      ctx.restore();
+    }
+  }
+
+  function drawPerson(x, y, tg) {
+    var evil = tg.typ === "bandit";
+    var flashHit = tg.state === "hit";
+    // hat
+    ctx.fillStyle = evil ? C.hat : "#3a4a2a";
+    ctx.fillRect(x + 2, y, 10, 3);
+    ctx.fillRect(x + 1, y + 2, 12, 2);
+    // head
+    ctx.fillStyle = flashHit ? C.white : C.skin;
+    ctx.fillRect(x + 3, y + 4, 8, 6);
+    // body
+    ctx.fillStyle = flashHit ? C.white : (evil ? C.bandana : "#4060a0");
+    ctx.fillRect(x + 2, y + 10, 10, 8);
+    // arms
+    ctx.fillStyle = C.skin;
+    ctx.fillRect(x, y + 10, 2, 6);
+    ctx.fillRect(x + 12, y + 10, 2, 6);
+    if (evil) {
+      // mask + gun
+      ctx.fillStyle = C.black;
+      ctx.fillRect(x + 3, y + 6, 8, 2);
+      ctx.fillStyle = C.rock;
+      if (tg.flip) ctx.fillRect(x - 2, y + 12, 5, 2);
+      else ctx.fillRect(x + 11, y + 12, 5, 2);
+    } else {
+      // friendly hat band / bow
+      ctx.fillStyle = C.yellow;
+      ctx.fillRect(x + 5, y + 2, 4, 1);
+    }
+    if (tg.state === "hit" && !evil) {
+      // X eyes implied by flash
+    }
+  }
+  function drawBottle(x, y, tg) {
+    ctx.fillStyle = tg.state === "hit" ? C.white : "#3a8a5a";
+    ctx.fillRect(x + 1, y + 4, 4, 8);
+    ctx.fillRect(x + 2, y, 2, 4);
+    ctx.fillStyle = C.white;
+    ctx.fillRect(x + 2, y + 5, 1, 3);
+  }
+  function drawCan(x, y, tg) {
+    ctx.fillStyle = tg.state === "hit" ? C.white : C.gray;
+    ctx.fillRect(x, y + 1, 8, 8);
+    ctx.fillStyle = C.red;
+    ctx.fillRect(x, y + 3, 8, 2);
+    ctx.fillStyle = C.dark;
+    ctx.fillRect(x, y, 8, 1);
+  }
+  function drawGold(x, y, tg) {
+    ctx.fillStyle = tg.state === "hit" ? C.white : C.gold;
+    ctx.fillRect(x + 1, y + 2, 8, 8);
+    ctx.fillRect(x + 2, y, 6, 2);
+    ctx.fillStyle = C.orange;
+    ctx.fillRect(x + 3, y + 4, 4, 2);
+  }
+
+  function drawParticles() {
+    for (var i = 0; i < particles.length; i++) {
+      var pt = particles[i];
+      ctx.globalAlpha = Math.max(0, pt.life / 0.45);
+      ctx.fillStyle = pt.c;
+      ctx.fillRect(pt.x | 0, pt.y | 0, pt.sz, pt.sz);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawCrosshair(x, y, who, isLocal) {
+    x = x | 0; y = y | 0;
+    var col = who === 2 ? C.blue : C.red;
+    var colD = who === 2 ? C.blueD : C.redD;
+    ctx.fillStyle = col;
+    // plus
+    ctx.fillRect(x - 6, y, 4, 1);
+    ctx.fillRect(x + 3, y, 4, 1);
+    ctx.fillRect(x, y - 6, 1, 4);
+    ctx.fillRect(x, y + 3, 1, 4);
+    ctx.fillStyle = C.white;
+    ctx.fillRect(x, y, 1, 1);
+    // corner brackets
+    ctx.fillStyle = colD;
+    ctx.fillRect(x - 7, y - 7, 3, 1);
+    ctx.fillRect(x - 7, y - 7, 1, 3);
+    ctx.fillRect(x + 5, y - 7, 3, 1);
+    ctx.fillRect(x + 7, y - 7, 1, 3);
+    ctx.fillRect(x - 7, y + 7, 3, 1);
+    ctx.fillRect(x - 7, y + 5, 1, 3);
+    ctx.fillRect(x + 5, y + 7, 3, 1);
+    ctx.fillRect(x + 7, y + 5, 1, 3);
+    drawText(who === 2 ? "P2" : "P1", x + 8, y - 10, col, 1, "left");
+  }
+
+  function drawHud() {
+    ctx.fillStyle = C.hud;
+    ctx.fillRect(0, 0, W, HUD);
+    ctx.fillStyle = C.woodD;
+    ctx.fillRect(0, HUD - 1, W, 1);
+    drawText("P1 " + p1.score, 2, 4, C.red, 1, "left");
+    // lives p1
+    for (var i = 0; i < 3; i++) {
+      ctx.fillStyle = i < p1.lives ? C.red : C.woodD;
+      ctx.fillRect(54 + i * 6, 5, 4, 4);
+    }
+    var mid = (ui === "play") ? "R" + round + " " + Math.ceil(Math.max(0, roundTime)) : (ui === "ready" ? "READY" : (ui === "banner" ? "ROUND" : "DUEL"));
+    if (mode === "solo" && ui === "play") mid = "R" + round + " " + Math.ceil(Math.max(0, roundTime));
+    drawText(mid, W / 2, 4, C.yellow, 1, "center");
+    if (isMulti()) {
+      drawText(p2.score + " P2", W - 20, 4, C.blue, 1, "right");
+      for (i = 0; i < 3; i++) {
+        ctx.fillStyle = i < p2.lives ? C.blue : C.woodD;
+        ctx.fillRect(W - 72 + i * 6, 5, 4, 4);
+      }
+    } else {
+      drawText("HI " + hiScore, W - 20, 4, C.gray, 1, "right");
+    }
+  }
+
+  function drawMute(mx, my) {
+    ctx.fillStyle = audio.muted ? C.red : C.gold;
+    ctx.fillRect(mx, my + 2, 3, 3);
+    ctx.fillRect(mx + 3, my + 1, 1, 5);
+    ctx.fillRect(mx + 4, my, 1, 7);
+    if (audio.muted) {
+      ctx.fillStyle = C.red;
+      ctx.fillRect(mx + 6, my + 1, 1, 1);
+      ctx.fillRect(mx + 7, my + 2, 1, 1);
+      ctx.fillRect(mx + 8, my + 3, 1, 1);
+      ctx.fillRect(mx + 7, my + 4, 1, 1);
+      ctx.fillRect(mx + 6, my + 5, 1, 1);
+    }
+  }
+
+  function dimPanel(y, h) {
+    ctx.fillStyle = "rgba(14,10,8,0.72)";
+    ctx.fillRect(16, y, W - 32, h);
+    ctx.fillStyle = C.wood;
+    ctx.fillRect(16, y, W - 32, 2);
+    ctx.fillRect(16, y + h - 2, W - 32, 2);
+  }
+
+  function renderTitle() {
+    dimPanel(18, 92);
+    drawText("WILD WEST", W / 2, 28, C.yellow, 3, "center");
+    drawText("GALLERY", W / 2, 52, C.orange, 3, "center");
+    ctx.fillStyle = C.red;
+    ctx.fillRect(70, 76, 180, 2);
+    drawText("8-BIT SHOOTING GALLERY", W / 2, 84, C.gray, 1, "center");
+    drawText("HI SCORE " + hiScore, W / 2, 98, C.gold, 1, "center");
+
+    dimPanel(138, 58);
+    var top = 148;
+    for (var i = 0; i < MENU.length; i++) {
+      var sel = menuIndex === i;
+      var label = (sel ? "> " : "  ") + MENU[i] + (sel ? " <" : "");
+      drawText(label, W / 2, top + i * 16, sel ? C.white : C.dark, 1, "center");
+    }
+    var blink = ((time * 2) | 0) % 2 === 0;
+    if (blink) drawText("ENTER TO SELECT", W / 2, 206, C.gray, 1, "center");
+    drawText("CLICK / SPACE SHOOT   P PAUSE   M MUTE", W / 2, 222, C.dark, 1, "center");
+  }
+
+  function renderHost() {
+    dimPanel(36, 150);
+    drawText("HOST GAME", W / 2, 48, C.yellow, 2, "center");
+    if (net.status === "loading") {
+      drawText("STARTING ROOM...", W / 2, 90, C.gray, 1, "center");
+    } else if (net.status === "error") {
+      drawText("ERROR", W / 2, 86, C.red, 1, "center");
+      wrapText(net.error || "FAILED", 100, C.gray);
+    } else {
+      drawText("ROOM CODE", W / 2, 80, C.gray, 1, "center");
+      drawText(net.room || "----", W / 2, 96, C.white, 3, "center");
+      drawText("SHARE THIS LINK", W / 2, 124, C.gray, 1, "center");
+      wrapText(roomLink(), 138, C.gold);
+      var msg = net.status === "waiting" ? "WAITING FOR PARTNER..." : "CONNECTING...";
+      var blink = ((time * 2) | 0) % 2 === 0;
+      if (blink) drawText(msg, W / 2, 162, C.white, 1, "center");
+    }
+    drawText("ESC TO CANCEL", W / 2, 200, C.dark, 1, "center");
+  }
+
+  function renderJoin() {
+    dimPanel(36, 150);
+    drawText("JOIN GAME", W / 2, 48, C.blue, 2, "center");
+    drawText("ENTER 4-CHARACTER CODE", W / 2, 80, C.gray, 1, "center");
+    var shown = (typing + "____").slice(0, 4);
+    drawText(shown, W / 2, 100, C.white, 3, "center");
+    if (net.status === "loading" || net.status === "connecting") {
+      drawText("CONNECTING...", W / 2, 140, C.yellow, 1, "center");
+    } else if (net.status === "error") {
+      wrapText(net.error || "FAILED", 140, C.red);
+    } else {
+      drawText("PRESS ENTER TO JOIN", W / 2, 140, C.gray, 1, "center");
+    }
+    drawText("ESC TO CANCEL", W / 2, 200, C.dark, 1, "center");
+  }
+
+  function wrapText(str, y, color) {
+    str = String(str).toUpperCase();
+    var max = 36;
+    if (str.length <= max) { drawText(str, W / 2, y, color, 1, "center"); return; }
+    // crude wrap
+    var a = str.slice(0, max), b = str.slice(max);
+    drawText(a, W / 2, y, color, 1, "center");
+    drawText(b, W / 2, y + 10, color, 1, "center");
+  }
+
+  function renderReady() {
+    dimPanel(80, 50);
+    drawText(round === 0 ? "GET READY" : "ROUND " + (round + 1), W / 2, 92, C.yellow, 2, "center");
+    drawText(isMulti() ? "FIRST HIT WINS THE TARGET" : "SHOOT THE BADGES  SPARE THE FOLK", W / 2, 114, C.gray, 1, "center");
+  }
+
+  function renderBanner() {
+    dimPanel(70, 70);
+    var col = banner && banner.winner === 2 ? C.blue : (banner && banner.winner === 1 ? C.red : C.yellow);
+    if (banner) {
+      drawText(banner.text, W / 2, 86, col, 1, "center");
+      drawText(banner.sub, W / 2, 106, C.white, 1, "center");
+    }
+  }
+
+  function renderPaused() {
+    dimPanel(80, 50);
+    drawText("PAUSED", W / 2, 92, C.white, 2, "center");
+    drawText("P TO RESUME   ESC TITLE", W / 2, 114, C.gray, 1, "center");
+  }
+
+  function renderOver() {
+    dimPanel(50, 130);
+    var col = banner && banner.winner === 2 ? C.blue : (banner && banner.winner === 1 ? C.red : C.yellow);
+    drawText(banner ? banner.text : "GAME OVER", W / 2, 66, col, 1, "center");
+    if (banner) drawText(banner.sub, W / 2, 88, C.white, 1, "center");
+    if (isMulti()) {
+      drawText("P1 " + p1.score + "   P2 " + p2.score, W / 2, 108, C.gray, 1, "center");
+    } else {
+      drawText("HI SCORE " + hiScore, W / 2, 108, C.gold, 1, "center");
+    }
+    var blink = ((time * 2) | 0) % 2 === 0;
+    if (blink) drawText(mode === "guest" ? "ESC FOR TITLE" : "PRESS START", W / 2, 136, C.white, 1, "center");
+    drawText("ENTER RESTART   ESC TITLE", W / 2, 156, C.dark, 1, "center");
+  }
+
+  // ---------- Loop ----------
+  var last = 0;
+  function loop(ts) {
+    if (!last) last = ts;
+    var dt = Math.min(0.05, (ts - last) / 1000);
+    last = ts;
+    update(dt);
+    render();
+    justPressed = Object.create(null);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // Test hooks for headless checks
+  window.__GALLERY__ = {
+    getUi: function () { return ui; },
+    getMode: function () { return mode; },
+    getRoom: function () { return net.room; },
+    getNet: function () { return { status: net.status, error: net.error, peerOk: net.peerOk, open: !!(net.conn && net.conn.open) }; },
+    getP1: function () { return { x: p1.x, y: p1.y, score: p1.score, lives: p1.lives }; },
+    getP2: function () { return { x: p2.x, y: p2.y, score: p2.score, lives: p2.lives }; },
+    getTargets: function () { return targets.map(packTarget); },
+    getLink: function () { return net.room ? roomLink() : ""; },
+    hostGame: hostGame,
+    joinGame: joinGame,
+    startSolo: startSolo,
+    setMenu: function (i) { menuIndex = i; },
+    chooseMenu: chooseMenu,
+    backToTitle: backToTitle,
+    aim: function (x, y) { aimAt(x, y); var lp = localPlayer(); lp.x = pointer.x; lp.y = pointer.y; },
+    shoot: function () { wantShot = true; },
+    getTargetBoxes: function () {
+      return targets.map(function (tg) {
+        var b = targetBox(tg);
+        return { id: tg.id, typ: tg.typ, state: tg.state, x: b.x, y: b.y, w: b.w, h: b.h };
+      });
+    }
+  };
+})();
+</script>
+</body>
+</html>
